@@ -26,82 +26,18 @@ app.service("TaskService", function(CacheFactory, $http, $q, $location) {
 
   return {
     // List returns a ListTasksResponse object.
-    List: function(view) {
+    List: function(view, page_size) {
       if (!view) {
         view = "MINIMAL"
       }
       url = angular.copy($location)
       url.search("view", view)
+      if (page_size) {
+        url.search("page_size", page_size)
+      }
       return $http.get(url.url()).then(function(response) {
         return response.data;
       })
-    },
-
-    // Get returns a task with the given view.
-    Get: function (id, view) {
-      if (!view) {
-        view = "MINIMAL"
-      }
-
-      var deferred = $q.defer()
-      var url = '/v1/tasks/' + id + "?view=" + view
-
-      // If the task was cached, return it immediately.
-      // Otherwise, send an HTTP request.
-      var cached = cache.get(url)
-      if (cached) {
-        deferred.resolve(cached)
-      } else {
-        $http.get(url).then(function(response) {
-          var task = response.data
-          // Only cache tasks which are done.
-          if (isDone(task)) {
-            cache.put(url, task)
-          }
-          deferred.resolve(task)
-        })
-      }
-
-      return deferred.promise
-    },
-
-    // BatchGet calls GetTask on a list of task IDs and waits for all requests to finish.
-    BatchGet: function(ids, view) {
-      var requests = []
-      for (var i = 0; i < ids.length; i++) {
-        var id = ids[i]
-        var req = this.Get(id, view)
-        requests.push(req)
-      }
-      return $q.all(requests)
-    },
-
-    // OptimalList does some magic to lower the overhead of getting a list of tasks.
-    OptimalList: function() {
-      var taskSvc = this
-
-      // First get a list with the minimal view.
-      // This request has a very low overhead, and gets us a list of task IDs.
-      return this.List().then(function(listResponse) {
-
-        // Now, for each task in the minimal view, get the basic view.
-        // Separating the requests allows tasks to each be cached individually.
-        var ids = []
-        if (listResponse.tasks) {
-          for (var i = 0; i < listResponse.tasks.length; i++) {
-            var id = listResponse.tasks[i].id
-            ids.push(id)
-          }
-        }
-        return taskSvc.BatchGet(ids, "BASIC").then(function(tasks) {
-          // Reformat the response to look like a ListTasksResponse.
-          return {
-            next_page_token: listResponse.next_page_token,
-            tasks: tasks,
-          }
-        })
-      })
-
     },
   }
 })
@@ -263,7 +199,9 @@ app.controller("TaskListController", function($rootScope, $scope, $http, $timeou
 
   $scope.cancelTask = function(taskID) {
     var url = "/v1/tasks/" + taskID + ":cancel";
-    $http.post(url);
+    $http.post(url).then(function(resposne) {
+      refresh();
+    });
   }
 
   TaskFilters.$watch("state", function(oldval, newval) {
@@ -279,21 +217,12 @@ app.controller("TaskListController", function($rootScope, $scope, $http, $timeou
       refresh();
     }
   }, true)
-
-  function refresh(callback) {
-    // If tab/window is in the background, don't refresh.
-    if (document.hidden) {
-      if (callback) {
-        callback()
-      }
-      return
-    }
-
+  
+  function refresh() {
     setUrlParams();
-    TaskService.OptimalList().then(function(response) {
+    TaskService.List("BASIC", 50).then(function(response) {
       $scope.$applyAsync(function() {
         $scope.tasks = response.tasks;
-
         if (response.next_page_token) {
           url = angular.copy($location);
           url.search("page_token", response.next_page_token);
@@ -301,26 +230,12 @@ app.controller("TaskListController", function($rootScope, $scope, $http, $timeou
         } else {
           $rootScope.nextPage = "";
         }
-
-        if (callback) {
-          callback();
-        }
       });
     });
   }
 
-  function autoRefresh() {
-    refresh(function() {
-      stop = $timeout(autoRefresh, 1000);
-    });
-  }
-
   readUrlParams();
-  autoRefresh();
-
-  $scope.$on("$destroy", function() {
-    $timeout.cancel(stop);
-  });
+  refresh();
 });
 
 app.controller("NodeListController", function($rootScope, $scope, $http, $timeout) {
@@ -328,26 +243,13 @@ app.controller("NodeListController", function($rootScope, $scope, $http, $timeou
   $scope.url = "/v1/nodes";
   $scope.nodes = [];
 
-  function refresh() {
-    if (document.hidden) {
-      stop = $timeout(refresh, 2000);
-      return
-    }
-
-    $http.get($scope.url).then(function(response) {
-      $scope.$applyAsync(function() {
-        $scope.nodes = response.data.nodes;
-        $scope.nodes.sort(idDesc);
-        stop = $timeout(refresh, 2000);
-      });
+  $http.get($scope.url).then(function(response) {
+    $scope.$applyAsync(function() {
+      $scope.nodes = response.data.nodes;
+      $scope.nodes.sort(idDesc);
     });
-  }
-
-  refresh();
-
-  $scope.$on("$destroy", function() {
-    $timeout.cancel(stop);
   });
+
 });
 
 function getServerURL($location) {
@@ -402,7 +304,9 @@ app.controller("TaskInfoController", function($rootScope, $scope, $http, $routeP
   }
 
   $scope.cancelTask = function() {
-    $http.post($scope.url + ":cancel");
+    $http.post($scope.url + ":cancel").then(function(response) {
+      refresh();
+    });
   }
 
   $scope.syslogs = [];
@@ -441,33 +345,20 @@ app.controller("TaskInfoController", function($rootScope, $scope, $http, $routeP
   }
 
   function refresh() {
-    if (document.hidden) {
-      stop = $timeout(refresh, 2000);
-      return
-    }
-
-    if (!$scope.isDone($scope.task)) {
-      $http.get($scope.url + "?view=FULL")
-        .success(function(data, status, headers, config) {
-          $scope.task = data;
-          parseSystemLogs(data);
-          $scope.loaded = true;
-          stop = $timeout(refresh, 2000);
-        })
-        .error(function(data, status, headers, config){
-          if (status == 404) {
-            $scope.notFound = true;
-            $timeout.cancel(stop);
-          }
-        });
-    }
+    $http.get($scope.url + "?view=FULL")
+      .success(function(data, status, headers, config) {
+        $scope.task = data;
+        parseSystemLogs(data);
+        $scope.loaded = true;
+      })
+      .error(function(data, status, headers, config){
+        if (status == 404) {
+          $scope.notFound = true;
+        }
+      });
   }
-
+  
   refresh();
-
-  $scope.$on("$destroy", function() {
-    $timeout.cancel(stop);
-  });
 });
 
 app.controller("NodeInfoController", function($rootScope, $scope, $http, $routeParams, $location, $timeout, $filter, Page) {
@@ -490,31 +381,17 @@ app.controller("NodeInfoController", function($rootScope, $scope, $http, $routeP
     return s;
   }
 
-  function refresh() {
-    if (document.hidden) {
-      stop = $timeout(refresh, 2000);
-      return
-    }
-
-    $http.get($scope.url)
+  $http.get($scope.url)
     .success(function(data, status, headers, config) {
       $scope.node = data;
       $scope.loaded = true;
-      stop = $timeout(refresh, 2000);
     })
     .error(function(data, status, headers, config){
       if (status == 404) {
         $scope.notFound = true;
-        $timeout.cancel(stop);
       }
     });
-  }
 
-  refresh();
-
-  $scope.$on("$destroy", function() {
-    $timeout.cancel(stop);
-  });
 });
 
 app.controller("ServiceInfoController", function($rootScope, $scope, $http, $location) {
