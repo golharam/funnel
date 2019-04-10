@@ -1,29 +1,9 @@
 var angular = require("angular")
 var angular_route = require("angular-route")
-var angular_cache = require("angular-cache")
 var mdl = require("material-design-lite")
-var app = angular.module("TESApp", ["ngRoute", "angular-cache"]);
+var app = angular.module("TESApp", ["ngRoute"]);
 
-app.config(function(CacheFactoryProvider) {
-  // Max cache item age of 60 minutes.
-  angular.extend(CacheFactoryProvider.defaults, { maxAge: 60 * 60 * 1000 });
-})
-
-app.service("TaskService", function(CacheFactory, $http, $q, $location) {
-
-  // Initialize the task cache, if needed.
-  if (!CacheFactory.get('taskCache')) {
-    CacheFactory.createCache('taskCache', {
-      // Only store up to 1000 tasks.
-      // When the limit is reached, the least recently used (LRU) tasks will be evicted.
-      capacity: 1000,
-      // Store tasks in the browser's local storage, which persists across reloads and tabs.
-      storageMode: "localStorage",
-    })
-  }
-  var cache = CacheFactory.get('taskCache')
-  var listCache = CacheFactory.get('listCache')
-
+app.service("TaskService", function($http, $q, $location) {
   return {
     // List returns a ListTasksResponse object.
     List: function(view, page_size) {
