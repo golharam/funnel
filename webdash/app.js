@@ -179,7 +179,7 @@ app.controller("TaskListController", function($rootScope, $scope, $http, $timeou
 
   $scope.cancelTask = function(taskID) {
     var url = "/v1/tasks/" + taskID + ":cancel";
-    $http.post(url).then(function(resposne) {
+    $http.post(url).then(function(response) {
       refresh();
     });
   }
